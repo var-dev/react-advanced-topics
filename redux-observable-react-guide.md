@@ -240,7 +240,7 @@ action$.pipe(ofType(fetchUsersRequested))
 import { type Epic, ofType } from "redux-observable";
 import { switchMap, map, catchError } from "rxjs/operators";
 import { of, from } from "rxjs";
-import type { RootState } from "./rootReducer";
+import type { RootState } from "./store";
 import type { UnknownAction } from "@reduxjs/toolkit";
 import { fetchUsersRequested } from "./usersActions";
 import {
@@ -375,8 +375,6 @@ const rootReducer = combineReducers({
   auth: authReducer,
 });
 
-export type RootState = ReturnType<typeof rootReducer>;
-
 export default rootReducer;
 ```
 
@@ -390,7 +388,7 @@ export default rootReducer;
 import { configureStore } from "@reduxjs/toolkit";
 import { createEpicMiddleware } from "redux-observable";
 import type { UnknownAction } from "@reduxjs/toolkit";
-import rootReducer, { type RootState } from "./rootReducer";
+import rootReducer from "./rootReducer";
 import rootEpic from "./rootEpic";
 import * as api from "./userApi";
 
@@ -399,11 +397,13 @@ export interface EpicDependencies {
   api: typeof api;
 }
 
-// 1. Create the epic middleware with typed generics
+// 1. Create the epic middleware with typed generics.
+//    We use ReturnType<typeof rootReducer> here because the store
+//    (and therefore RootState) doesn't exist yet at this point.
 const epicMiddleware = createEpicMiddleware<
   UnknownAction,
   UnknownAction,
-  RootState,
+  ReturnType<typeof rootReducer>,
   EpicDependencies
 >({
   dependencies: { api },
@@ -422,36 +422,18 @@ const store = configureStore({
 // 3. Run the root epic AFTER the store is created
 epicMiddleware.run(rootEpic);
 
-export type AppDispatch = typeof store.dispatch;
+// 4. Infer types from the store itself — the official recommended approach.
+//    These are the canonical types the rest of the app should import.
+export type AppStore = typeof store;
+export type RootState = ReturnType<AppStore["getState"]>;
+export type AppDispatch = AppStore["dispatch"];
 
 export { store };
-export type { RootState };
 ```
 
 ### Key difference from saga setup
 
 With sagas you call `sagaMiddleware.run(rootSaga)`. With redux-observable you call `epicMiddleware.run(rootEpic)`. Same timing rule applies — always after the store is created.
-
----
-
-## Where `RootState` and `AppDispatch` Come From
-
-These two types are inferred from the store — not hand-written — so they stay in sync as you add slices or middleware.
-
-```typescript
-// In rootReducer.ts:
-export type RootState = ReturnType<typeof rootReducer>;
-// → { users: UsersState; auth: AuthState; ... }
-// The full shape of your Redux state tree.
-
-// In store.ts:
-export type AppDispatch = typeof store.dispatch;
-// → Dispatch that understands all middleware in the chain.
-// The plain Dispatch from Redux only knows about { type: string }.
-// AppDispatch knows about everything your middleware can handle.
-```
-
-Both update automatically when you add a new slice to `combineReducers` or add middleware.
 
 ---
 
@@ -468,7 +450,7 @@ import type { AppDispatch, RootState } from "./store";
 // .withTypes() was added in react-redux v9.1.0.
 export const useAppDispatch = useDispatch.withTypes<AppDispatch>();
 export const useAppSelector = useSelector.withTypes<RootState>();
-export const useAppStore = useStore.withTypes<typeof store>();
+export const useAppStore = useStore.withTypes<AppStore>();
 ```
 
 - `useAppDispatch()` — returns `AppDispatch`, so dispatching epic trigger actions is type-safe.
@@ -476,6 +458,29 @@ export const useAppStore = useStore.withTypes<typeof store>();
 - `useAppStore()` — gives the full store instance for one-shot reads (exports, analytics) without subscribing to re-renders.
 
 Place this file next to `store.ts` and `App.tsx`.
+
+---
+
+## Where `AppStore`, `RootState` and `AppDispatch` Come From
+
+These types are inferred from the store itself — not from the reducer, and not hand-written. This is the approach recommended by the [official Redux TypeScript Quick Start](https://redux.js.org/tutorials/typescript-quick-start).
+
+```typescript
+// In store.ts:
+export type AppStore = typeof store;
+export type RootState = ReturnType<AppStore["getState"]>;
+// → { users: UsersState; auth: AuthState; ... }
+// The full shape of your Redux state tree.
+
+export type AppDispatch = AppStore["dispatch"];
+// → Dispatch that understands epic middleware and all action types.
+```
+
+Why from the store and not the reducer?
+
+- `ReturnType<typeof rootReducer>` gives you the state shape, but it doesn't account for middleware. `AppDispatch` derived from the store includes the dispatch overloads added by epic middleware, thunk middleware, etc.
+- Deriving both from `AppStore` keeps them consistent and co-located.
+- `AppStore` itself is useful for typing `renderWithStore` test helpers and SSR scenarios.
 
 ---
 
@@ -562,7 +567,8 @@ import {
   type UnknownAction,
 } from "@reduxjs/toolkit";
 import { createEpicMiddleware } from "redux-observable";
-import rootReducer, { type RootState } from "./rootReducer";
+import rootReducer from "./rootReducer";
+import type { RootState } from "./store";
 import rootEpic from "./rootEpic";
 import * as api from "./userApi";
 import type { EpicDependencies } from "./store";
@@ -795,7 +801,7 @@ import {
   fetchUsersSuccess,
   fetchUsersFailure,
 } from "./usersSlice";
-import type { RootState } from "./rootReducer";
+import type { RootState } from "./store";
 
 function createMockState(overrides: Partial<RootState> = {}): StateObservable<RootState> {
   const state: RootState = {
@@ -889,7 +895,7 @@ import { StateObservable } from "redux-observable";
 import { Subject } from "rxjs";
 import type { UnknownAction } from "@reduxjs/toolkit";
 import { searchEpic } from "./searchEpic";
-import type { RootState } from "./rootReducer";
+import type { RootState } from "./store";
 
 // Assume searchEpic debounces by 300ms then calls an API
 // action$.pipe(
@@ -1099,7 +1105,7 @@ When typing epics explicitly, you need the right imports:
 ```typescript
 import { type Epic } from "redux-observable";
 import type { UnknownAction } from "@reduxjs/toolkit";
-import type { RootState } from "./rootReducer";
+import type { RootState } from "./store";
 
 // Full explicit signature
 const myEpic: Epic<UnknownAction, UnknownAction, RootState, EpicDependencies> = (

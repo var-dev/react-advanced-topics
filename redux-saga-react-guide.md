@@ -305,9 +305,6 @@ const rootReducer = combineReducers({
   auth: authReducer,
 });
 
-// Derive the RootState type from the reducer itself — single source of truth.
-export type RootState = ReturnType<typeof rootReducer>;
-
 export default rootReducer;
 ```
 
@@ -321,7 +318,6 @@ export default rootReducer;
 import { configureStore } from "@reduxjs/toolkit";
 import createSagaMiddleware from "redux-saga";
 import rootReducer from "./rootReducer";
-import type { RootState } from "./rootReducer";
 import rootSaga from "../sagas/rootSaga";
 
 // 1. Create the saga middleware instance
@@ -341,11 +337,13 @@ const store = configureStore({
 // 3. Run the root saga AFTER the store is created
 sagaMiddleware.run(rootSaga);
 
-// ── Typed hooks (export from a hooks file in practice) ───────────
-export type AppDispatch = typeof store.dispatch;
+// 4. Infer types from the store itself — the official recommended approach.
+//    These update automatically as you add slices or middleware.
+export type AppStore = typeof store;
+export type RootState = ReturnType<AppStore["getState"]>;
+export type AppDispatch = AppStore["dispatch"];
 
 export { store };
-export type { RootState };
 ```
 
 ### Typed hooks (recommended pattern)
@@ -370,7 +368,7 @@ import type { AppDispatch, RootState } from "./store";
 // It returns a new hook function pre-bound to your store types.
 export const useAppDispatch = useDispatch.withTypes<AppDispatch>();
 export const useAppSelector = useSelector.withTypes<RootState>();
-export const useAppStore = useStore.withTypes<typeof store>();
+export const useAppStore = useStore.withTypes<AppStore>();
 ```
 
 > The older pattern you may see in tutorials uses type-assertion aliases:
@@ -389,25 +387,28 @@ Why this matters:
 - If the store shape changes (slices added/removed), every component using these hooks gets updated type checking for free.
 - It's the pattern recommended by the official RTK TypeScript docs.
 
-### Where `RootState` and `AppDispatch` come from
+### Where `AppStore`, `RootState` and `AppDispatch` come from
 
-These two types are the foundation of every typed hook. They're inferred from the store itself — not hand-written — so they stay in sync automatically as you add slices or middleware.
+These two types are inferred from the store itself — not from the reducer, and not hand-written. This is the approach recommended by the [official Redux TypeScript Quick Start](https://redux.js.org/tutorials/typescript-quick-start).
 
 ```typescript
-// In rootReducer.ts:
-export type RootState = ReturnType<typeof rootReducer>;
-// → { users: UsersState; auth: AuthState; ... }
-// Represents the full shape of your Redux state tree.
-
 // In store.ts:
-export type AppDispatch = typeof store.dispatch;
+export type AppStore = typeof store;
+export type RootState = ReturnType<AppStore["getState"]>;
+// → { users: UsersState; auth: AuthState; ... }
+// The full shape of your Redux state tree.
+
+export type AppDispatch = AppStore["dispatch"];
 // → Dispatch that understands thunks, saga middleware, and all
 //   action types your store accepts.
-// The plain Dispatch from Redux only knows about { type: string }.
-// AppDispatch knows about everything your middleware can handle.
 ```
 
-Both are derived with `typeof` / `ReturnType` — if you add a new slice to `combineReducers`, `RootState` updates. If you add middleware, `AppDispatch` updates. No manual maintenance.
+Why from the store and not the reducer?
+
+- `ReturnType<typeof rootReducer>` gives you the state shape, but it doesn't account for middleware. `AppDispatch` derived from the store includes the dispatch overloads added by saga middleware, thunk middleware, etc.
+- Deriving both `RootState` and `AppDispatch` from the same source (`AppStore`) keeps them consistent and co-located.
+- If you add middleware that changes the dispatch signature, `AppDispatch` updates automatically.
+- `AppStore` itself is useful for typing `renderWithStore` test helpers and SSR scenarios.
 
 #### `useAppStore` — when and why
 
@@ -541,7 +542,8 @@ import {
   type UnknownAction,
 } from "@reduxjs/toolkit";
 import createSagaMiddleware from "redux-saga";
-import rootReducer, { type RootState } from "../store/rootReducer";
+import rootReducer from "../store/rootReducer";
+import type { RootState } from "../store/store";
 import rootSaga from "../sagas/rootSaga";
 
 // ── Types ────────────────────────────────────────────────────────
@@ -1246,7 +1248,7 @@ import {
   type UnknownAction,
   isAction,
 } from "@reduxjs/toolkit";
-import type { RootState } from "./rootReducer";
+import type { RootState } from "./store";
 
 const loggingMiddleware: Middleware<{}, RootState> = (storeApi) => (next) => (action) => {
   // `action` is `unknown` in RTK 2.x middleware signatures.
@@ -1430,7 +1432,7 @@ function getErrorMessage(error: unknown): string {
 
 ```typescript
 import { select } from "redux-saga/effects";
-import type { RootState } from "../../store/rootReducer";
+import type { RootState } from "../../store/store";
 
 function* mySaga(): Generator {
   // ❌ result is `unknown`
