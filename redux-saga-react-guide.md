@@ -389,6 +389,26 @@ Why this matters:
 - If the store shape changes (slices added/removed), every component using these hooks gets updated type checking for free.
 - It's the pattern recommended by the official RTK TypeScript docs.
 
+### Where `RootState` and `AppDispatch` come from
+
+These two types are the foundation of every typed hook. They're inferred from the store itself — not hand-written — so they stay in sync automatically as you add slices or middleware.
+
+```typescript
+// In rootReducer.ts:
+export type RootState = ReturnType<typeof rootReducer>;
+// → { users: UsersState; auth: AuthState; ... }
+// Represents the full shape of your Redux state tree.
+
+// In store.ts:
+export type AppDispatch = typeof store.dispatch;
+// → Dispatch that understands thunks, saga middleware, and all
+//   action types your store accepts.
+// The plain Dispatch from Redux only knows about { type: string }.
+// AppDispatch knows about everything your middleware can handle.
+```
+
+Both are derived with `typeof` / `ReturnType` — if you add a new slice to `combineReducers`, `RootState` updates. If you add middleware, `AppDispatch` updates. No manual maintenance.
+
 #### `useAppStore` — when and why
 
 `useSelector` subscribes to the store and re-renders on every change to the selected slice. Sometimes you just want to read the current state once without triggering re-renders — that's where `useAppStore` comes in.
