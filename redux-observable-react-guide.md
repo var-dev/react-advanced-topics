@@ -414,6 +414,8 @@ const store = configureStore({
   reducer: rootReducer,
   middleware: (getDefaultMiddleware) =>
     getDefaultMiddleware({
+      // Disable thunk — epics handle all side effects.
+      thunk: false,
       // redux-observable uses non-serializable Observable objects internally.
       serializableCheck: false,
     }).concat(epicMiddleware),
@@ -425,15 +427,17 @@ epicMiddleware.run(rootEpic);
 // 4. Infer types from the store itself — the official recommended approach.
 //    These are the canonical types the rest of the app should import.
 export type AppStore = typeof store;
-export type RootState = ReturnType<AppStore["getState"]>;
-export type AppDispatch = AppStore["dispatch"];
+export type RootState = ReturnType<typeof store.getState>;
+export type AppDispatch = typeof store.dispatch;
 
 export { store };
 ```
 
-### Key difference from saga setup
+### Why `Dispatch<UnknownAction>` is correct
 
-With sagas you call `sagaMiddleware.run(rootSaga)`. With redux-observable you call `epicMiddleware.run(rootEpic)`. Same timing rule applies — always after the store is created.
+`Dispatch<UnknownAction>` is the *input constraint*, not the output type. When you call `dispatch(fetchUsersRequested())`, TypeScript narrows to the specific action type at the call site — full payload type safety. The `UnknownAction` constraint just means "accepts any object with a `type` string". The type safety comes from the action creators, not from the dispatch constraint.
+
+This is the community-accepted approach. See the [saga guide](./redux-saga-react-guide.md#why-dispatchunknownaction-is-correct) for the full explanation.
 
 ---
 
@@ -466,20 +470,19 @@ Place this file next to `store.ts` and `App.tsx`.
 These types are inferred from the store itself — not from the reducer, and not hand-written. This is the approach recommended by the [official Redux TypeScript Quick Start](https://redux.js.org/tutorials/typescript-quick-start).
 
 ```typescript
-// In store.ts:
+// In store.ts — all three types derived from the store:
 export type AppStore = typeof store;
-export type RootState = ReturnType<AppStore["getState"]>;
+export type RootState = ReturnType<typeof store.getState>;
 // → { users: UsersState; auth: AuthState; ... }
-// The full shape of your Redux state tree.
 
-export type AppDispatch = AppStore["dispatch"];
-// → Dispatch that understands epic middleware and all action types.
+export type AppDispatch = typeof store.dispatch;
+// → Dispatch<UnknownAction>  (with thunk: false)
 ```
 
 Why from the store and not the reducer?
 
-- `ReturnType<typeof rootReducer>` gives you the state shape, but it doesn't account for middleware. `AppDispatch` derived from the store includes the dispatch overloads added by epic middleware, thunk middleware, etc.
-- Deriving both from `AppStore` keeps them consistent and co-located.
+- Deriving both `RootState` and `AppDispatch` from the store keeps them co-located and consistent.
+- If you pass reducers directly to `configureStore` (without a separate `rootReducer`), `ReturnType<typeof store.getState>` is the only way to get the state type.
 - `AppStore` itself is useful for typing `renderWithStore` test helpers and SSR scenarios.
 
 ---

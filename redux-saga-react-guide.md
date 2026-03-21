@@ -328,6 +328,8 @@ const store = configureStore({
   reducer: rootReducer,
   middleware: (getDefaultMiddleware) =>
     getDefaultMiddleware({
+      // Disable thunk — sagas handle all side effects.
+      thunk: false,
       // redux-saga uses non-serializable effect objects internally.
       // Disable the serializable check to avoid false warnings.
       serializableCheck: false,
@@ -340,15 +342,35 @@ sagaMiddleware.run(rootSaga);
 // 4. Infer types from the store itself — the official recommended approach.
 //    These update automatically as you add slices or middleware.
 export type AppStore = typeof store;
-export type RootState = ReturnType<AppStore["getState"]>;
-export type AppDispatch = AppStore["dispatch"];
+export type RootState = ReturnType<typeof store.getState>;
+export type AppDispatch = typeof store.dispatch;
 
 export { store };
 ```
 
+### Why `Dispatch<UnknownAction>` is correct
+
+`Dispatch<UnknownAction>` is the *input constraint*, not the output type. It means "accepts any object with a `type: string`". It does not erase payload types at the call site:
+
+```typescript
+// From redux source
+interface Dispatch<A extends Action = UnknownAction> {
+  <T extends A>(action: T): T
+}
+
+// When you call dispatch, TypeScript narrows T to the specific action type:
+dispatch(fetchUsersRequested());  // T = { type: "users/fetchRequested" }
+dispatch(fetchUsersSuccess([]));  // T = PayloadAction<User[]>
+// Full payload type safety — UnknownAction is just the floor, not the ceiling.
+```
+
+RTK action creators (`createAction`, `slice.actions.*`) produce fully typed `PayloadAction<T>` objects. The type safety comes from the action creator, not from the dispatch constraint. You never write `dispatch({ type: "some-string" })` by hand — you always use action creators, which are already typed.
+
+This is the community-accepted approach: `thunk: false`, `typeof store.dispatch` for `AppDispatch`, typed hooks via `.withTypes()`, and `Dispatch<UnknownAction>` as the resulting type. The RTK maintainers consider this correct and intentional.
+
 ### Typed hooks (recommended pattern)
 
-The plain `useDispatch` and `useSelector` hooks from `react-redux` know nothing about your store. `useDispatch` returns a generic `Dispatch` that doesn't understand thunks or saga actions, and `useSelector` types state as `unknown`. You'd have to annotate every call site manually:
+The plain `useDispatch` and `useSelector` hooks from `react-redux` know nothing about your store. `useDispatch` returns a generic `Dispatch`, and `useSelector` types state as `unknown`. You'd have to annotate every call site manually:
 
 ```typescript
 // ❌ Without typed hooks — repetitive and error-prone
@@ -381,7 +403,7 @@ export const useAppStore = useStore.withTypes<AppStore>();
 
 Why this matters:
 
-- `useAppDispatch()` returns `AppDispatch`, so dispatching saga trigger actions and thunks is type-safe without casts.
+- `useAppDispatch()` returns `AppDispatch`, so dispatching saga trigger actions is type-safe without casts.
 - `useAppSelector(state => state.users)` infers `state` as `RootState` — autocomplete works, typos are caught at compile time.
 - `useAppStore()` gives you the full store instance inside a component. You rarely need it — `useSelector` and `useDispatch` cover most cases. It's useful when you need to read state outside the React render cycle (e.g. in an event handler or effect where you want a one-shot snapshot without subscribing to re-renders).
 - If the store shape changes (slices added/removed), every component using these hooks gets updated type checking for free.
@@ -389,25 +411,22 @@ Why this matters:
 
 ### Where `AppStore`, `RootState` and `AppDispatch` come from
 
-These two types are inferred from the store itself — not from the reducer, and not hand-written. This is the approach recommended by the [official Redux TypeScript Quick Start](https://redux.js.org/tutorials/typescript-quick-start).
+These types are inferred from the store itself — not from the reducer, and not hand-written. This is the approach recommended by the [official Redux TypeScript Quick Start](https://redux.js.org/tutorials/typescript-quick-start).
 
 ```typescript
-// In store.ts:
+// In store.ts — all three types derived from the store:
 export type AppStore = typeof store;
-export type RootState = ReturnType<AppStore["getState"]>;
+export type RootState = ReturnType<typeof store.getState>;
 // → { users: UsersState; auth: AuthState; ... }
-// The full shape of your Redux state tree.
 
-export type AppDispatch = AppStore["dispatch"];
-// → Dispatch that understands thunks, saga middleware, and all
-//   action types your store accepts.
+export type AppDispatch = typeof store.dispatch;
+// → Dispatch<UnknownAction>  (with thunk: false)
 ```
 
 Why from the store and not the reducer?
 
-- `ReturnType<typeof rootReducer>` gives you the state shape, but it doesn't account for middleware. `AppDispatch` derived from the store includes the dispatch overloads added by saga middleware, thunk middleware, etc.
-- Deriving both `RootState` and `AppDispatch` from the same source (`AppStore`) keeps them consistent and co-located.
-- If you add middleware that changes the dispatch signature, `AppDispatch` updates automatically.
+- Deriving both `RootState` and `AppDispatch` from the store keeps them co-located and consistent.
+- If you pass reducers directly to `configureStore` (without a separate `rootReducer`), `ReturnType<typeof store.getState>` is the only way to get the state type.
 - `AppStore` itself is useful for typing `renderWithStore` test helpers and SSR scenarios.
 
 #### `useAppStore` — when and why
